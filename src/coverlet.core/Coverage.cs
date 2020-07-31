@@ -391,14 +391,14 @@ namespace Coverlet.Core
                         if (hitLocation.isBranch)
                         {
                             var branch = document.Branches[new BranchKey(hitLocation.start, hitLocation.end)];
-                            branch.Hits += hits;
+                            branch.Hits = hits;
                         }
                         else
                         {
                             for (int j = hitLocation.start; j <= hitLocation.end; j++)
                             {
                                 var line = document.Lines[j];
-                                line.Hits += hits;
+                                line.Hits = hits;
 
                                 // We register 0 hit lines for later cleanup false positive of nested lambda closures
                                 if (hits == 0)

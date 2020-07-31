@@ -4,6 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Reflection;
 using System.Threading;
+using System.Timers;
 
 namespace Coverlet.Core.Instrumentation
 {
@@ -23,12 +24,18 @@ namespace Coverlet.Core.Instrumentation
         public static bool SingleHit;
         public static bool FlushHitFile;
         private static readonly bool _enableLog = int.TryParse(Environment.GetEnvironmentVariable("COVERLET_ENABLETRACKERLOG"), out int result) ? result == 1 : false;
+        private static System.Timers.Timer timer = new System.Timers.Timer(30000);
 
         static ModuleTrackerTemplate()
         {
             // At the end of the instrumentation of a module, the instrumenter needs to add code here
             // to initialize the static fields according to the values derived from the instrumentation of
             // the module.
+        }
+
+        private static void Timer_Elapsed(object sender, ElapsedEventArgs e)
+        {
+            UnloadModule(sender, e);
         }
 
         // A call to this method will be injected in the static constructor above for most cases. However, if the
@@ -38,6 +45,9 @@ namespace Coverlet.Core.Instrumentation
         {
             AppDomain.CurrentDomain.ProcessExit += new EventHandler(UnloadModule);
             AppDomain.CurrentDomain.DomainUnload += new EventHandler(UnloadModule);
+            timer.Elapsed += Timer_Elapsed;
+            timer.AutoReset = true;
+            timer.Enabled = true;
         }
 
         public static void RecordHitInCoreLibrary(int hitLocationIndex)
