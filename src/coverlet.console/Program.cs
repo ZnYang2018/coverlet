@@ -34,7 +34,7 @@ namespace Coverlet.Console
             serviceCollection.AddTransient<ILogger, ConsoleLogger>();
             // We need to keep singleton/static semantics
             serviceCollection.AddSingleton<IInstrumentationHelper, CustomInstrumentationHelper>();
-            serviceCollection.AddSingleton<ISourceRootTranslator, SourceRootTranslator>(provider => new SourceRootTranslator(provider.GetRequiredService<ILogger>(), provider.GetRequiredService<IFileSystem>()));
+            serviceCollection.AddSingleton<ISourceRootTranslator, SourceRootTranslator>(provider => new SourceRootTranslator("CoverletSourceRootsMapping", provider.GetRequiredService<ILogger>(), provider.GetRequiredService<IFileSystem>()));
             serviceCollection.AddSingleton<ICecilSymbolHelper, CecilSymbolHelper>();
 
             CommandLineApplication app = new CommandLineApplication();
@@ -59,7 +59,7 @@ namespace Coverlet.Console
             {
                 app.ShowHelp();
             }
-            catch(CommandParsingException e)
+            catch (CommandParsingException e)
             {
                 System.Console.WriteLine(e.Message);
                 e.Command.ShowHelp();
