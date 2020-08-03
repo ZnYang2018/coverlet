@@ -1,11 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Text;
-
 using ConsoleTables;
 using Coverlet.Console.Custom;
 using Coverlet.Console.Logging;
@@ -22,35 +18,16 @@ namespace Coverlet.Console
 {
     class Program
     {
+        static IServiceCollection serviceCollection = new ServiceCollection();
+
+        /// <summary>
+        /// Sample:
+        /// <para>inject "D:\tempCode\TestLibrary.dll" --include-test-assembly</para>
+        /// <para>collect "D:\tempCode\CoverageResult" --format opencover</para>
+        /// </summary>
+        /// <param name="args"></param>
         static void Main(string[] args)
         {
-            args = new string[]
-            {
-                //"injector",@"D:\Projects\C#\CodeCoverage2\CodeCoverage2\bin\Debug\netcoreapp3.1\TestLibrary.dll","--include-test-assembly"
-                "collector", @"D:\github\coverlet-coverage\coverlet\src\coverlet.console\bin\Debug\netcoreapp2.2\CoverageResult_4ec76d37-ecc6-4917-a7b4-2f390dbf4a99","--format", "opencover"
-            };
-            if (args[0].ToLower() == "injector")
-            {
-                Injector(args.Skip(1).ToArray());
-            }
-            else if (args[0].ToLower() == "collector")
-            {
-                Collector(args.Skip(1).ToArray());
-            }
-            else
-            {
-                System.Console.WriteLine($"Invalid type {args[0]}. (injector|collector)");
-            }
-        }
-
-        static int Injector(string[] args)
-        {
-            //args = new string[]{ @"D:\Projects\C#\CodeCoverage2\CodeCoverage2\bin\Debug\netcoreapp3.1\TestLibrary.dll",
-            //    "--include-test-assembly",
-            //    "--format",
-            //    "opencover"
-            //    };
-            IServiceCollection serviceCollection = new ServiceCollection();
             serviceCollection.AddTransient<IRetryHelper, RetryHelper>();
             serviceCollection.AddTransient<IProcessExitHandler, ProcessExitHandler>();
             serviceCollection.AddTransient<IFileSystem, FileSystem>();
@@ -60,16 +37,43 @@ namespace Coverlet.Console
             serviceCollection.AddSingleton<ISourceRootTranslator, SourceRootTranslator>(provider => new SourceRootTranslator(provider.GetRequiredService<ILogger>(), provider.GetRequiredService<IFileSystem>()));
             serviceCollection.AddSingleton<ICecilSymbolHelper, CecilSymbolHelper>();
 
+            CommandLineApplication app = new CommandLineApplication();
+            app.Name = "coverlet";
+            app.FullName = "Cross platform .NET Core code coverage tool";
+            app.HelpOption();
+            app.VersionOption("-v|--version", GetAssemblyVersion());
+
+            app.Command("inject", ConfigInjector);
+            app.Command("collect", ConfigCollector);
+
+            app.OnExecute(() =>
+            {
+                app.ShowHelp();
+            });
+
+            try
+            {
+                app.Execute(args);
+            }
+            catch (UnrecognizedCommandParsingException)
+            {
+                app.ShowHelp();
+            }
+            catch(CommandParsingException e)
+            {
+                System.Console.WriteLine(e.Message);
+                e.Command.ShowHelp();
+            }
+        }
+
+        static void ConfigInjector(CommandLineApplication app)
+        {
             ServiceProvider serviceProvider = serviceCollection.BuildServiceProvider();
 
             var logger = (ConsoleLogger)serviceProvider.GetService<ILogger>();
             var fileSystem = serviceProvider.GetService<IFileSystem>();
 
-            var app = new CommandLineApplication();
-            app.Name = "coverlet";
-            app.FullName = "Cross platform .NET Core code coverage tool";
-            app.HelpOption("-h|--help");
-            app.VersionOption("-v|--version", GetAssemblyVersion());
+            app.HelpOption();
             int exitCode = (int)CommandExitCodes.Success;
 
             CommandArgument module = app.Argument("<ASSEMBLY>", "Path to the test assembly.");
@@ -120,7 +124,7 @@ namespace Coverlet.Console
                 CoveragePrepareResult coveragePrepareResult = coverage.PrepareModules();
 
                 // store the result
-                using (Stream fs = fileSystem.NewFileStream($"CoverageResult_{Guid.NewGuid()}", FileMode.Create, FileAccess.Write))
+                using (Stream fs = fileSystem.NewFileStream($"CoverageResult", FileMode.Create, FileAccess.Write))
                 using (Stream stream = CoveragePrepareResult.Serialize(coveragePrepareResult))
                 {
                     stream.CopyTo(fs);
@@ -128,36 +132,16 @@ namespace Coverlet.Console
 
                 return exitCode;
             });
-
-            return app.Execute(args);
         }
 
-        static int Collector(string[] args)
+        static void ConfigCollector(CommandLineApplication app)
         {
-            //args = new string[]{ @"D:\Projects\C#\CodeCoverage2\CodeCoverage2\bin\Debug\netcoreapp3.1\TestLibrary.dll",
-            //    "--format",
-            //    "opencover"
-            //    };
-            IServiceCollection serviceCollection = new ServiceCollection();
-            serviceCollection.AddTransient<IRetryHelper, RetryHelper>();
-            serviceCollection.AddTransient<IProcessExitHandler, ProcessExitHandler>();
-            serviceCollection.AddTransient<IFileSystem, FileSystem>();
-            serviceCollection.AddTransient<ILogger, ConsoleLogger>();
-            // We need to keep singleton/static semantics
-            serviceCollection.AddSingleton<IInstrumentationHelper, CustomInstrumentationHelper>();
-            serviceCollection.AddSingleton<ISourceRootTranslator, SourceRootTranslator>(provider => new SourceRootTranslator(provider.GetRequiredService<ILogger>(), provider.GetRequiredService<IFileSystem>()));
-            serviceCollection.AddSingleton<ICecilSymbolHelper, CecilSymbolHelper>();
-
             ServiceProvider serviceProvider = serviceCollection.BuildServiceProvider();
 
             var logger = (ConsoleLogger)serviceProvider.GetService<ILogger>();
             var fileSystem = serviceProvider.GetService<IFileSystem>();
 
-            var app = new CommandLineApplication();
-            app.Name = "coverlet";
-            app.FullName = "Cross platform .NET Core code coverage tool";
-            app.HelpOption("-h|--help");
-            app.VersionOption("-v|--version", GetAssemblyVersion());
+            app.HelpOption();
             int exitCode = (int)CommandExitCodes.Success;
 
             CommandArgument prepareResult = app.Argument("<RESULT FILE>", "Path to the test coverage result file.");
@@ -169,6 +153,9 @@ namespace Coverlet.Console
 
             app.OnExecute(() =>
             {
+                if (string.IsNullOrEmpty(prepareResult.Value) || string.IsNullOrWhiteSpace(prepareResult.Value))
+                    throw new CommandParsingException(app, "No test coverage result file specified.");
+
                 // collect the coverage result
                 CoveragePrepareResult coveragePrepareResult = null;
                 using (Stream fs = fileSystem.NewFileStream(prepareResult.Value, FileMode.Open, FileAccess.Read))
@@ -307,8 +294,6 @@ namespace Coverlet.Console
                     throw new Exception(exceptionMessageBuilder.ToString());
                 }
             });
-
-            return app.Execute(args);
         }
 
         static string GetAssemblyVersion() => typeof(Program).Assembly.GetName().Version.ToString();
