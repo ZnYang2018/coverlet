@@ -150,6 +150,7 @@ namespace Coverlet.Console
             CommandOption threshold = app.Option("--threshold", "Exits with error if the coverage % is below value.", CommandOptionType.SingleValue);
             CommandOption thresholdTypes = app.Option("--threshold-type", "Coverage type to apply the threshold to.", CommandOptionType.MultipleValue);
             CommandOption thresholdStat = app.Option("--threshold-stat", "Coverage statistic used to enforce the threshold value.", CommandOptionType.SingleValue);
+            CommandOption mergeWith = app.Option("--merge-with", "Path to existing coverage result to merge.", CommandOptionType.SingleValue);
 
             app.OnExecute(() =>
             {
@@ -161,6 +162,11 @@ namespace Coverlet.Console
                 using (Stream fs = fileSystem.NewFileStream(prepareResult.Value, FileMode.Open, FileAccess.Read))
                 {
                     coveragePrepareResult = CoveragePrepareResult.Deserialize(fs);
+                }
+
+                if (mergeWith.HasValue())
+                {
+                    coveragePrepareResult.MergeWith = mergeWith.Value();
                 }
 
                 Coverage coverage = new Coverage(coveragePrepareResult, logger,
