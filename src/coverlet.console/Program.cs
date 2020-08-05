@@ -130,6 +130,12 @@ namespace Coverlet.Console
                     stream.CopyTo(fs);
                 }
 
+                System.Console.WriteLine("Injected modules are:");
+                foreach (var result in coveragePrepareResult.Results)
+                {
+                    System.Console.WriteLine($"\t{result.ModulePath}");
+                }
+
                 return exitCode;
             });
         }
