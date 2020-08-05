@@ -62,7 +62,7 @@ Now we can merge the Manual and UT's coverage result into one.
 ```batch
 dotnet coverlet.console collect CoverageResult --format opencover --format json --merge-with ".\old data\coverage.json"
 ```
-![CollectMergeResult](images/collectMergeResult.png)
+![CollectMergeResult](images/CollectMergeResult.png)
 And get report  
 _Report/Seismic.HelloWorld.Server_AboutController.html_
 ![MergedReport](images/mergedReport.png)
