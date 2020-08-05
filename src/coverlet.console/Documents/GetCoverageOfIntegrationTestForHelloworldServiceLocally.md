@@ -53,6 +53,7 @@ With all things done run the UT
 ```batch
 dotnet test Seismic.HelloWorld.Server.Tests.dll
 ```
+When UT is done collect the result from UT.  
 ![CollectUIResult](images/CollectUTResult.png)
 And then run reportgenerator to get report. We can also see the **GetAboutAsync** is trigger once by UT  
 _Report/Seismic.HelloWorld.Server_AboutController.html_
