@@ -1,11 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Diagnostics;
 using System.IO;
 using System.Text;
-
 using ConsoleTables;
+using Coverlet.Console.Custom;
 using Coverlet.Console.Logging;
 using Coverlet.Core;
 using Coverlet.Core.Abstractions;
@@ -20,39 +18,66 @@ namespace Coverlet.Console
 {
     class Program
     {
-        static int Main(string[] args)
+        static IServiceCollection serviceCollection = new ServiceCollection();
+
+        /// <summary>
+        /// Sample:
+        /// <para>inject "D:\tempCode\TestLibrary.dll" --include-test-assembly</para>
+        /// <para>collect "D:\tempCode\CoverageResult" --format opencover</para>
+        /// </summary>
+        /// <param name="args"></param>
+        static void Main(string[] args)
         {
-            IServiceCollection serviceCollection = new ServiceCollection();
             serviceCollection.AddTransient<IRetryHelper, RetryHelper>();
             serviceCollection.AddTransient<IProcessExitHandler, ProcessExitHandler>();
             serviceCollection.AddTransient<IFileSystem, FileSystem>();
             serviceCollection.AddTransient<ILogger, ConsoleLogger>();
             // We need to keep singleton/static semantics
-            serviceCollection.AddSingleton<IInstrumentationHelper, InstrumentationHelper>();
-            serviceCollection.AddSingleton<ISourceRootTranslator, SourceRootTranslator>(provider => new SourceRootTranslator(provider.GetRequiredService<ILogger>(), provider.GetRequiredService<IFileSystem>()));
+            serviceCollection.AddSingleton<IInstrumentationHelper, CustomInstrumentationHelper>();
+            serviceCollection.AddSingleton<ISourceRootTranslator, SourceRootTranslator>(provider => new SourceRootTranslator("CoverletSourceRootsMapping", provider.GetRequiredService<ILogger>(), provider.GetRequiredService<IFileSystem>()));
             serviceCollection.AddSingleton<ICecilSymbolHelper, CecilSymbolHelper>();
 
+            CommandLineApplication app = new CommandLineApplication();
+            app.Name = "coverlet";
+            app.FullName = "Cross platform .NET Core code coverage tool";
+            app.HelpOption();
+            app.VersionOption("-v|--version", GetAssemblyVersion());
+
+            app.Command("inject", ConfigInjector);
+            app.Command("collect", ConfigCollector);
+
+            app.OnExecute(() =>
+            {
+                app.ShowHelp();
+            });
+
+            try
+            {
+                app.Execute(args);
+            }
+            catch (UnrecognizedCommandParsingException)
+            {
+                app.ShowHelp();
+            }
+            catch (CommandParsingException e)
+            {
+                System.Console.WriteLine(e.Message);
+                e.Command.ShowHelp();
+            }
+        }
+
+        static void ConfigInjector(CommandLineApplication app)
+        {
             ServiceProvider serviceProvider = serviceCollection.BuildServiceProvider();
 
             var logger = (ConsoleLogger)serviceProvider.GetService<ILogger>();
             var fileSystem = serviceProvider.GetService<IFileSystem>();
 
-            var app = new CommandLineApplication();
-            app.Name = "coverlet";
-            app.FullName = "Cross platform .NET Core code coverage tool";
-            app.HelpOption("-h|--help");
-            app.VersionOption("-v|--version", GetAssemblyVersion());
+            app.HelpOption();
             int exitCode = (int)CommandExitCodes.Success;
 
             CommandArgument module = app.Argument("<ASSEMBLY>", "Path to the test assembly.");
-            CommandOption target = app.Option("-t|--target", "Path to the test runner application.", CommandOptionType.SingleValue);
-            CommandOption targs = app.Option("-a|--targetargs", "Arguments to be passed to the test runner.", CommandOptionType.SingleValue);
-            CommandOption output = app.Option("-o|--output", "Output of the generated coverage report", CommandOptionType.SingleValue);
             CommandOption<LogLevel> verbosity = app.Option<LogLevel>("-v|--verbosity", "Sets the verbosity level of the command. Allowed values are quiet, minimal, normal, detailed.", CommandOptionType.SingleValue);
-            CommandOption formats = app.Option("-f|--format", "Format of the generated coverage report.", CommandOptionType.MultipleValue);
-            CommandOption threshold = app.Option("--threshold", "Exits with error if the coverage % is below value.", CommandOptionType.SingleValue);
-            CommandOption thresholdTypes = app.Option("--threshold-type", "Coverage type to apply the threshold to.", CommandOptionType.MultipleValue);
-            CommandOption thresholdStat = app.Option("--threshold-stat", "Coverage statistic used to enforce the threshold value.", CommandOptionType.SingleValue);
             CommandOption excludeFilters = app.Option("--exclude", "Filter expressions to exclude specific modules and types.", CommandOptionType.MultipleValue);
             CommandOption includeFilters = app.Option("--include", "Filter expressions to include only specific modules and types.", CommandOptionType.MultipleValue);
             CommandOption excludedSourceFiles = app.Option("--exclude-by-file", "Glob patterns specifying source files to exclude.", CommandOptionType.MultipleValue);
@@ -67,9 +92,6 @@ namespace Coverlet.Console
             {
                 if (string.IsNullOrEmpty(module.Value) || string.IsNullOrWhiteSpace(module.Value))
                     throw new CommandParsingException(app, "No test assembly specified.");
-
-                if (!target.HasValue())
-                    throw new CommandParsingException(app, "Target must be specified.");
 
                 if (verbosity.HasValue())
                 {
@@ -97,32 +119,66 @@ namespace Coverlet.Console
                                                  fileSystem,
                                                  serviceProvider.GetRequiredService<ISourceRootTranslator>(),
                                                  serviceProvider.GetRequiredService<ICecilSymbolHelper>());
-                                                 coverage.PrepareModules();
 
-                Process process = new Process();
-                process.StartInfo.FileName = target.Value();
-                process.StartInfo.Arguments = targs.HasValue() ? targs.Value() : string.Empty;
-                process.StartInfo.CreateNoWindow = true;
-                process.StartInfo.RedirectStandardOutput = true;
-                process.StartInfo.RedirectStandardError = true;
-                process.OutputDataReceived += (sender, eventArgs) =>
+                // inject to the test dll
+                CoveragePrepareResult coveragePrepareResult = coverage.PrepareModules();
+
+                // store the result
+                using (Stream fs = fileSystem.NewFileStream($"CoverageResult", FileMode.Create, FileAccess.Write))
+                using (Stream stream = CoveragePrepareResult.Serialize(coveragePrepareResult))
                 {
-                    if (!string.IsNullOrEmpty(eventArgs.Data))
-                        logger.LogInformation(eventArgs.Data, important: true);
-                };
+                    stream.CopyTo(fs);
+                }
 
-                process.ErrorDataReceived += (sender, eventArgs) =>
+                System.Console.WriteLine("Injected modules are:");
+                foreach (var result in coveragePrepareResult.Results)
                 {
-                    if (!string.IsNullOrEmpty(eventArgs.Data))
-                        logger.LogError(eventArgs.Data);
-                };
+                    System.Console.WriteLine($"\t{result.ModulePath}");
+                }
 
-                process.Start();
+                return exitCode;
+            });
+        }
 
-                process.BeginErrorReadLine();
-                process.BeginOutputReadLine();
+        static void ConfigCollector(CommandLineApplication app)
+        {
+            ServiceProvider serviceProvider = serviceCollection.BuildServiceProvider();
 
-                process.WaitForExit();
+            var logger = (ConsoleLogger)serviceProvider.GetService<ILogger>();
+            var fileSystem = serviceProvider.GetService<IFileSystem>();
+
+            app.HelpOption();
+            int exitCode = (int)CommandExitCodes.Success;
+
+            CommandArgument prepareResult = app.Argument("<RESULT FILE>", "Path to the test coverage result file.");
+            CommandOption output = app.Option("-o|--output", "Output of the generated coverage report", CommandOptionType.SingleValue);
+            CommandOption formats = app.Option("-f|--format", "Format of the generated coverage report.", CommandOptionType.MultipleValue);
+            CommandOption threshold = app.Option("--threshold", "Exits with error if the coverage % is below value.", CommandOptionType.SingleValue);
+            CommandOption thresholdTypes = app.Option("--threshold-type", "Coverage type to apply the threshold to.", CommandOptionType.MultipleValue);
+            CommandOption thresholdStat = app.Option("--threshold-stat", "Coverage statistic used to enforce the threshold value.", CommandOptionType.SingleValue);
+            CommandOption mergeWith = app.Option("--merge-with", "Path to existing coverage result to merge.", CommandOptionType.SingleValue);
+
+            app.OnExecute(() =>
+            {
+                if (string.IsNullOrEmpty(prepareResult.Value) || string.IsNullOrWhiteSpace(prepareResult.Value))
+                    throw new CommandParsingException(app, "No test coverage result file specified.");
+
+                // collect the coverage result
+                CoveragePrepareResult coveragePrepareResult = null;
+                using (Stream fs = fileSystem.NewFileStream(prepareResult.Value, FileMode.Open, FileAccess.Read))
+                {
+                    coveragePrepareResult = CoveragePrepareResult.Deserialize(fs);
+                }
+
+                if (mergeWith.HasValue())
+                {
+                    coveragePrepareResult.MergeWith = mergeWith.Value();
+                }
+
+                Coverage coverage = new Coverage(coveragePrepareResult, logger,
+                                                     serviceProvider.GetRequiredService<IInstrumentationHelper>(),
+                                                     fileSystem,
+                                                     serviceProvider.GetRequiredService<ISourceRootTranslator>());
 
                 var dOutput = output.HasValue() ? output.Value() : Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar.ToString();
                 var dThreshold = threshold.HasValue() ? double.Parse(threshold.Value()) : 0;
@@ -131,7 +187,7 @@ namespace Coverlet.Console
 
                 logger.LogInformation("\nCalculating coverage result...");
 
-                var result = coverage.GetCoverageResult();
+                CoverageResult result = coverage.GetCoverageResult();
                 var directory = Path.GetDirectoryName(dOutput);
                 if (directory == string.Empty)
                 {
@@ -168,6 +224,7 @@ namespace Coverlet.Console
                         fileSystem.WriteAllText(report, reporter.Report(result));
                     }
                 }
+
 
                 var thresholdTypeFlags = ThresholdTypeFlags.None;
 
@@ -222,10 +279,10 @@ namespace Coverlet.Console
                 coverageTable.AddRow("Average", $"{averageLinePercent}%", $"{averageBranchPercent}%", $"{averageMethodPercent}%");
 
                 logger.LogInformation(coverageTable.ToStringAlternative());
-                if (process.ExitCode > 0)
-                {
-                    exitCode += (int)CommandExitCodes.TestFailed;
-                }
+                //if (process.ExitCode > 0)
+                //{
+                //    exitCode += (int)CommandExitCodes.TestFailed;
+                //}
                 thresholdTypeFlags = result.GetThresholdTypesBelowThreshold(summary, dThreshold, thresholdTypeFlags, dThresholdStat);
                 if (thresholdTypeFlags != ThresholdTypeFlags.None)
                 {
@@ -248,30 +305,7 @@ namespace Coverlet.Console
 
                     throw new Exception(exceptionMessageBuilder.ToString());
                 }
-
-                return exitCode;
             });
-
-            try
-            {
-                return app.Execute(args);
-            }
-            catch (CommandParsingException ex)
-            {
-                logger.LogError(ex.Message);
-                app.ShowHelp();
-                return (int)CommandExitCodes.CommandParsingException;
-            }
-            catch (Win32Exception we) when (we.Source == "System.Diagnostics.Process")
-            {
-                logger.LogError($"Start process '{target.Value()}' failed with '{we.Message}'");
-                return exitCode > 0 ? exitCode : (int)CommandExitCodes.Exception;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex.Message);
-                return exitCode > 0 ? exitCode : (int)CommandExitCodes.Exception;
-            }
         }
 
         static string GetAssemblyVersion() => typeof(Program).Assembly.GetName().Version.ToString();

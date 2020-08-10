@@ -352,7 +352,7 @@ namespace Coverlet.Core
         {
             foreach (var result in _results)
             {
-                if (!_fileSystem.Exists(result.HitsFilePath))
+                if (!_fileSystem.Exists(_sourceRootTranslator.ResolveFilePath(result.HitsFilePath)))
                 {
                     // Hits file could be missed mainly for two reason
                     // 1) Issue during module Unload()
@@ -375,7 +375,7 @@ namespace Coverlet.Core
 
                 List<(int docIndex, int line)> zeroHitsLines = new List<(int docIndex, int line)>();
                 var documentsList = result.Documents.Values.ToList();
-                using (var fs = _fileSystem.NewFileStream(result.HitsFilePath, FileMode.Open))
+                using (var fs = _fileSystem.NewFileStream(_sourceRootTranslator.ResolveFilePath(result.HitsFilePath), FileMode.Open))
                 using (var br = new BinaryReader(fs))
                 {
                     int hitCandidatesCount = br.ReadInt32();
@@ -391,14 +391,14 @@ namespace Coverlet.Core
                         if (hitLocation.isBranch)
                         {
                             var branch = document.Branches[new BranchKey(hitLocation.start, hitLocation.end)];
-                            branch.Hits += hits;
+                            branch.Hits = hits;
                         }
                         else
                         {
                             for (int j = hitLocation.start; j <= hitLocation.end; j++)
                             {
                                 var line = document.Lines[j];
-                                line.Hits += hits;
+                                line.Hits = hits;
 
                                 // We register 0 hit lines for later cleanup false positive of nested lambda closures
                                 if (hits == 0)
